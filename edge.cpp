@@ -254,13 +254,51 @@ int main(int argc, char* argv[]) {
   // goes for the host just as much as the device.
 
   /* PARALLEL IMPLEMENTATION BEGINS HERE */
+
+  /* Partition image across the 4 devices row-wise */
+  int inImgPartitionWidth = inImgWidth;
+  int inImgPartitionHeight = inImgHeight / howmany_devices;
+  sycl::range<2> partitionGlobalRange = sycl::range(inImgPartitionWidth, inImgPartitionHeight);
+  sycl::nd_range<2> partitionNdRange = sycl::nd_range(partitionGlobalRange,localRange);
+
+  auto partitionInBufRange = 
+      sycl::range(inImgPartitionHeight + (halo * 2), inImgPartitionWidth + (halo * 2)) *
+      sycl::range(1, channels);
+
+  auto partitionOutBufRange =
+      sycl::range(inImgPartitionHeight, inImgPartitionWidth) * sycl::range(1, channels);
 {
-    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
-    auto outBuf = sycl::buffer<float, 2>{outBufRange};
+
+    /* Create array of sycl buffers that contains partitions of the input image.
+     * Iterate through the array of queues and for each one, submit a kernel with an accessor tied to the partition of the input image.
+     * Also write back to appropriate region of output using pointer offset.
+     * I think each kernel should be identical given the way we have partitioned the image. */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
+
+    
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #ifdef CORRECTNESS
     /* Rerun the image blurring on a single device to make sure it works */
+    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
+    auto outBuf = sycl::buffer<float, 2>{outBufRange};
     outBuf.set_final_data(outImageCorrect.data());
 
     sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {

@@ -28,7 +28,9 @@ this code doesn't check for limits (bad, bad, bad!)
 ********************************************************************/
 
 #define MYDEBUGS
-#define DOUBLETROUBLE
+#define DEBUGDUMP
+//#define DOUBLETROUBLE
+#define CORRECTNESS
 
 #include <algorithm>
 #include <array>
@@ -71,6 +73,10 @@ int main(int argc, char* argv[]) {
   auto outImage = util::allocate_image(inImage.width(), inImage.height(),
                                        inImage.channels());
 
+#ifdef CORRECTNESS
+  auto outImageCorrect = util::allocate_image(inImage.width(), inImage.height(),
+                                        inImage.channels());
+#endif 
   // The image convolution support code provides a
   // `filter_type` enum which allows us to choose between
   // `identity` and `blur`. The utility for generating the
@@ -210,15 +216,25 @@ int main(int argc, char* argv[]) {
   auto inImgHeight = inImage.height();
   auto channels = inImage.channels();
   auto filterWidth = filter.width();
+  /* The halo is a region of extra space added to the image to make sure that the filter does not extend outside the image */
   auto halo = filter.half_width();
 
+  /* Defines the iteration domain of the entire image */
   auto globalRange = sycl::range(inImgWidth, inImgHeight);
+  /* Local thread group work size */
   auto localRange = sycl::range(1, 32);
+  /* ndRange object that lets us access both the global and the local ranges*/
   auto ndRange = sycl::nd_range(globalRange, localRange);
 
+  /* The multiplication operator * returns a range object with the same dimensionality (2) in this case,
+   * and it does an elementwise multiplication of the two ranges. 
+   * In this case, inBufRange appears to be an iteration domain slightly larger than the entire image,
+   * and the multiplication operator makes it so there is an entry in the range for each of the 3 color channels (RGB).
+   */
   auto inBufRange =
       sycl::range(inImgHeight + (halo * 2), inImgWidth + (halo * 2)) *
       sycl::range(1, channels);
+  /* What both of these ranges are is similar. Both are just ranges expanded so there is one element for each color. */
   auto outBufRange =
       sycl::range(inImgHeight, inImgWidth) * sycl::range(1, channels);
 
@@ -236,12 +252,72 @@ int main(int argc, char* argv[]) {
   // Remember: While a buffer exists, the data it points
   // to should ONLY be accessed with an accessor. That
   // goes for the host just as much as the device.
-
+    
   {
+    /* Buffers that contain the input image, output image, and filter */
     auto inBuf = sycl::buffer{inImage.data(), inBufRange};
     auto outBuf = sycl::buffer<float, 2>{outBufRange};
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
+    /* This makes it so the device writes the data in outBuf to outImage.data() after outBuf is destroyed */
     outBuf.set_final_data(outImage.data());
+
+    sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {
+      /* Access input, output, and filter */
+      sycl::accessor inAccessor{inBuf, cgh1, sycl::read_only};
+      sycl::accessor outAccessor{outBuf, cgh1, sycl::write_only};
+      sycl::accessor filterAccessor{filterBuf, cgh1, sycl::read_only};
+
+      /* Parallel for. Launch globalRange*localRange work items */
+      cgh1.parallel_for(ndRange, [=](sycl::nd_item<2> item) {
+        auto globalId = item.get_global_id();
+        /* I don't know why this line is necessary */
+        globalId = sycl::id{globalId[1], globalId[0]};
+
+        auto channelsStride = sycl::range(1, channels);
+        auto haloOffset = sycl::id(halo, halo);
+        /* Pixel that this work-item will access */
+        auto src = (globalId + haloOffset) * channelsStride;
+        auto dest = globalId * channelsStride;
+
+
+        // 100 is a hack - so the dim is not dynamic
+        float sum[/* channels */ 100];
+        assert(channels < 100);
+
+        for (size_t i = 0; i < channels; ++i) {
+          sum[i] = 0.0f;
+        }
+
+        /* Iterate through filter, I don't think these details matter */
+        for (int r = 0; r < filterWidth; ++r) {
+          for (int c = 0; c < filterWidth; ++c) {
+            auto srcOffset =
+                sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
+            auto filterOffset = sycl::id(r, c * channels);
+
+            for (int i = 0; i < channels; ++i) {
+              auto channelOffset = sycl::id(0, i);
+              sum[i] += inAccessor[srcOffset + channelOffset] *
+                        filterAccessor[filterOffset + channelOffset];
+            }
+          }
+        }
+
+        for (size_t i = 0; i < channels; ++i) {
+          outAccessor[dest + sycl::id{0, i}] = sum[i];
+        }
+      });
+    });
+
+    myQueue1.wait_and_throw();
+
+#ifdef CORRECTNESS
+{
+    /* Rerun the image blurring on a single device to make sure it works */
+    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
+    auto outBuf = sycl::buffer<float, 2>{outBufRange};
+    auto filterBuf = sycl::buffer{filter.data(), filterRange};
+    outBuf.set_final_data(outImageCorrect.data());
 
     sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {
       sycl::accessor inAccessor{inBuf, cgh1, sycl::read_only};
@@ -256,6 +332,7 @@ int main(int argc, char* argv[]) {
         auto haloOffset = sycl::id(halo, halo);
         auto src = (globalId + haloOffset) * channelsStride;
         auto dest = globalId * channelsStride;
+
 
         // 100 is a hack - so the dim is not dynamic
         float sum[/* channels */ 100];
@@ -286,6 +363,10 @@ int main(int argc, char* argv[]) {
     });
 
     myQueue1.wait_and_throw();
+
+}
+
+#endif
 
 #ifdef MYDEBUGS
     // Timing code is from our book (2nd edition) -
@@ -331,6 +412,10 @@ int main(int argc, char* argv[]) {
 catch (sycl::exception e) {
   std::cout << "Exception caught: " << e.what() << std::endl;
 }
+
+#ifdef CORRECTNESS
+check_image_correct(outImage, outImageCorrect);
+#endif
 
 util::write_image(outImage, outFile);
 }

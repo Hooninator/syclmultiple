@@ -6,6 +6,8 @@
  work.  If not, see <http://creativecommons.org/licenses/by-sa/4.0/>.
 */
 
+#include <exception>
+
 #ifndef __IMAGE_CONV_H__
 #define __IMAGE_CONV_H__
 
@@ -115,6 +117,24 @@ void write_image(const image_ref<T>& image, std::string imageFile) {
 
   stbi_write_png(imageFile.c_str(), image.width(), image.height(),
                  image.channels(), rawOutputData, 0);
+}
+
+template <typename T>
+void check_image_correct(const image_ref<T>& img1, const image_ref<T>& img2) {
+	std::cout<<"Checking correctness..."<<std::endl;
+	float EPSILON = 0.001;
+	assert(img1.width()==img2.width());
+	assert(img1.height()==img2.height());
+	for (int i=0; i<img1.width(); i++) {
+		for (int j=0; j<img1.height(); j++) {
+			try {
+				assert(fabs(img1.data()[i+j]-img2.data()[i+j])<EPSILON);
+			} catch(std::exception& e) {
+				std::cout<<"Correctness check failed."<<std::endl;
+			}
+		}
+	}
+	std::cout<<"Correctness check passed!"<<std::endl;
 }
 
   image_ref<float> generate_filter(filter_type filterType, int width, int channels) {

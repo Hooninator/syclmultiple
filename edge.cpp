@@ -252,71 +252,15 @@ int main(int argc, char* argv[]) {
   // Remember: While a buffer exists, the data it points
   // to should ONLY be accessed with an accessor. That
   // goes for the host just as much as the device.
-    
-  {
-    /* Buffers that contain the input image, output image, and filter */
+
+  /* PARALLEL IMPLEMENTATION BEGINS HERE */
+{
     auto inBuf = sycl::buffer{inImage.data(), inBufRange};
     auto outBuf = sycl::buffer<float, 2>{outBufRange};
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
-    /* This makes it so the device writes the data in outBuf to outImage.data() after outBuf is destroyed */
-    outBuf.set_final_data(outImage.data());
-
-    sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {
-      /* Access input, output, and filter */
-      sycl::accessor inAccessor{inBuf, cgh1, sycl::read_only};
-      sycl::accessor outAccessor{outBuf, cgh1, sycl::write_only};
-      sycl::accessor filterAccessor{filterBuf, cgh1, sycl::read_only};
-
-      /* Parallel for. Launch globalRange*localRange work items */
-      cgh1.parallel_for(ndRange, [=](sycl::nd_item<2> item) {
-        auto globalId = item.get_global_id();
-        /* I don't know why this line is necessary */
-        globalId = sycl::id{globalId[1], globalId[0]};
-
-        auto channelsStride = sycl::range(1, channels);
-        auto haloOffset = sycl::id(halo, halo);
-        /* Pixel that this work-item will access */
-        auto src = (globalId + haloOffset) * channelsStride;
-        auto dest = globalId * channelsStride;
-
-
-        // 100 is a hack - so the dim is not dynamic
-        float sum[/* channels */ 100];
-        assert(channels < 100);
-
-        for (size_t i = 0; i < channels; ++i) {
-          sum[i] = 0.0f;
-        }
-
-        /* Iterate through filter, I don't think these details matter */
-        for (int r = 0; r < filterWidth; ++r) {
-          for (int c = 0; c < filterWidth; ++c) {
-            auto srcOffset =
-                sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
-            auto filterOffset = sycl::id(r, c * channels);
-
-            for (int i = 0; i < channels; ++i) {
-              auto channelOffset = sycl::id(0, i);
-              sum[i] += inAccessor[srcOffset + channelOffset] *
-                        filterAccessor[filterOffset + channelOffset];
-            }
-          }
-        }
-
-        for (size_t i = 0; i < channels; ++i) {
-          outAccessor[dest + sycl::id{0, i}] = sum[i];
-        }
-      });
-    });
-
-    myQueue1.wait_and_throw();
 
 #ifdef CORRECTNESS
-{
     /* Rerun the image blurring on a single device to make sure it works */
-    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
-    auto outBuf = sycl::buffer<float, 2>{outBufRange};
-    auto filterBuf = sycl::buffer{filter.data(), filterRange};
     outBuf.set_final_data(outImageCorrect.data());
 
     sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {
@@ -364,7 +308,6 @@ int main(int argc, char* argv[]) {
 
     myQueue1.wait_and_throw();
 
-}
 
 #endif
 

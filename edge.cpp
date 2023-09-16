@@ -198,14 +198,16 @@ int main(int argc, char* argv[]) {
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = outOffset*queueId;
         size_t curOffsetIn = inOffset*queueId;
+        std::cout<<"Out offset: "<<curOffsetOut<<", "<<" In offset: "<<curOffsetIn<<std::endl;
 
-        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetOut, partitionInBufRange};
+        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn, partitionInBufRange};
         //inBufParts.push_back(inBufPart);
 
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
-        outBufPart.set_final_data(outImage.data()+curOffsetIn);
+        outBufPart.set_final_data(outImage.data()+curOffsetOut);
         //outBufParts.push_back(outBufPart);
         
+        std::cout<<"submitting kernel..."<<std::endl;
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
 
@@ -216,13 +218,18 @@ int main(int argc, char* argv[]) {
             sycl::accessor outBufAccessor{outBufPart, cgh, sycl::write_only};
 
             cgh.parallel_for(partitionNdRange, [=](sycl::nd_item<2> item) {
-                        
+                sycl::id<2> globalId = item.get_global_id();
+                outBufAccessor[globalId] = 1.0;
             });
 
         });
-
+        std::cout<<"Kernel submitted"<<std::endl;
     }
+    std::cout<<"Done submitting kernels"<<std::endl;
 
+    /* Wait for all devices to finish */
+    for (int i=0; i<ndevs; i++)
+        myQueues[i].wait();
 
     
      

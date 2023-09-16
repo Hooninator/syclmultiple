@@ -187,8 +187,8 @@ int main(int argc, char* argv[]) {
     //std::vector<sycl::buffer<float>> outBufParts(ndevs);
     
     /* Offsets used to compute partition for each device */
-    size_t outOffset = inImgWidth * (inImgPartitionHeight); 
-    size_t inOffset = (inImgWidth + (halo * 2)) * (inImgPartitionHeight + (halo * 2)) * channels;
+    size_t offsetOut = inImgWidth * (inImgPartitionHeight) * channels; 
+    size_t offsetIn = inImage.size_with_halo() / ndevs;
     
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
@@ -196,15 +196,18 @@ int main(int argc, char* argv[]) {
     /* Store events */
     std::vector<sycl::event> events(ndevs);
     for (int queueId=0; queueId<ndevs; queueId++) {
-        size_t curOffsetOut = outOffset*queueId;
-        size_t curOffsetIn = inOffset*queueId;
+        size_t curOffsetOut = offsetOut*queueId;
+        size_t curOffsetIn = offsetIn*queueId;
+        std::cout<<"Out increment: "<<offsetOut<<", in increment: "<<offsetIn<<std::endl;
         std::cout<<"Out offset: "<<curOffsetOut<<", "<<" In offset: "<<curOffsetIn<<std::endl;
+        std::cout<<"Out limit: "<<outImage.width()*outImage.height()*channels<<std::endl;
+        std::cout<<"In image size with halo: "<<inImage.size_with_halo()<<std::endl;
 
-        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn, partitionInBufRange};
+        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
         //inBufParts.push_back(inBufPart);
 
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
-        outBufPart.set_final_data(outImage.data()+curOffsetOut);
+        outBufPart.set_final_data(outImage.data() + curOffsetOut);
         //outBufParts.push_back(outBufPart);
         
         std::cout<<"submitting kernel..."<<std::endl;

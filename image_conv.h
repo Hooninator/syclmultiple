@@ -49,6 +49,10 @@ class image_ref {
 
   int size() const noexcept { return width_ * height_ * channels_; }
 
+  int size_with_halo() const noexcept {
+  	return (height_ + (halo_*2))*(width_+(halo_*2))*channels_;
+  }
+
   int half_width() const noexcept { return width_ / 2; }
 
  private:

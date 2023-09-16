@@ -204,44 +204,54 @@ int main(int argc, char* argv[]) {
         
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
-
         sycl::event e = queue.submit([&](sycl::handler& cgh) {
-           
             sycl::accessor filterAccessor{filterBuf, cgh, sycl::read_only};
             sycl::accessor inBufAccessor{inBufPart, cgh, sycl::read_only};
             sycl::accessor outBufAccessor{outBufPart, cgh, sycl::write_only};
-
             cgh.parallel_for(partitionNdRange, [=](sycl::nd_item<2> item) {
                 sycl::id<2> globalId = item.get_global_id();
-                outBufAccessor[globalId] = 1.0;
-            });
+                globalId = sycl::id{globalId[1], globalId[0]};
 
+		auto channelsStride = sycl::range(1, channels);
+		auto haloOffset = sycl::id(halo, halo);
+		auto src = (globalId + haloOffset) * channelsStride;
+		auto dest = globalId * channelsStride;
+
+
+		// 100 is a hack - so the dim is not dynamic
+		float sum[/* channels */ 100];
+		assert(channels < 100);
+
+		for (size_t i = 0; i < channels; ++i) {
+		  sum[i] = 0.0f;
+		}
+
+		for (int r = 0; r < filterWidth; ++r) {
+		  for (int c = 0; c < filterWidth; ++c) {
+		    auto srcOffset =
+			sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
+		    auto filterOffset = sycl::id(r, c * channels);
+
+		    for (int i = 0; i < channels; ++i) {
+		      auto channelOffset = sycl::id(0, i);
+		      sum[i] += inBufAccessor[srcOffset + channelOffset] *
+				filterAccessor[filterOffset + channelOffset];
+		    }
+		  }
+		}
+
+		for (size_t i = 0; i < channels; ++i) {
+		  outBufAccessor[dest + sycl::id{0, i}] = sum[i];
+		}
+
+            });
         });
+	events.push_back(e);
     }
 
     /* Wait for all devices to finish */
     for (int i=0; i<ndevs; i++)
         myQueues[i].wait();
-
-    
-     
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #ifdef CORRECTNESS
     /* Rerun the image blurring on a single device to make sure it works */

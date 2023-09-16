@@ -94,123 +94,30 @@ int main(int argc, char* argv[]) {
 #define MAXDEVICES 100
 
   sycl::queue myQueues[MAXDEVICES];
-  int howmany_devices = 0;
+  int ndevs = 0;
   try {
     auto P = sycl::platform(sycl::gpu_selector_v);
     auto RootDevices = P.get_devices();
     // auto C = sycl::context(RootDevices);
     for (auto &D : RootDevices) {
-      myQueues[howmany_devices++] = sycl::queue(D,sycl::property::queue::enable_profiling{});
-      if (howmany_devices >= MAXDEVICES)
+      myQueues[ndevs++] = sycl::queue(D,sycl::property::queue::enable_profiling{});
+      if (ndevs >= MAXDEVICES)
 	break;
     }
   } 
   catch (sycl::exception e) {
-    howmany_devices = 1;
+    ndevs = 1;
     myQueues[0] = sycl::queue(sycl::property::queue::enable_profiling{});
   }
 
-#ifdef DEBUGDUMP
-  for (int i = 0; i < howmany_devices; ++i) {
-    std::cout << "Device: "
-	      << myQueues[i].get_device().get_info<sycl::info::device::name>()
-	      << " MaxComputeUnits: " << myQueues[i].get_device().get_info<sycl::info::device::max_compute_units>();
-    if (myQueues[i].get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
-      auto UUID = myQueues[i].get_device().get_info<sycl::ext::intel::info::device::uuid>();
-      char foo[1024];
-      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",
-	      UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],
-	      UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
-      std::cout << foo;
-    }
-    std::cout << "\n";
-  }
-#endif
-
   try {
+    /* Define queues */
     sycl::queue myQueue1 = myQueues[0];
-
-   
-#ifdef MYDEBUGS
-    std::cout << "Running on "
-              << myQueue1.get_device().get_info<sycl::info::device::name>();
-#ifdef SYCL_EXT_INTEL_DEVICE_INFO
-#if SYCL_EXT_INTEL_DEVICE_INFO >= 2
-    if (myQueue1.get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
-      auto UUID = myQueue1.get_device().get_info<sycl::ext::intel::info::device::uuid>();
-      char foo[1024];
-      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
-      std::cout << foo;
-    }
-#endif
-#endif
-    std::cout << "\n";
-#endif
-
-#ifdef DOUBLETROUBLE
-    sycl::queue myQueue2 = myQueues[ (howmany_devices > 1) ? 1 : 0 ];
-    std::cout << "Second queue is running on "
-              << myQueue2.get_device().get_info<sycl::info::device::name>();
-#ifdef SYCL_EXT_INTEL_DEVICE_INFO
-#if SYCL_EXT_INTEL_DEVICE_INFO >= 2
-    if (myQueue2.get_device().has(sycl::aspect::ext_intel_device_info_uuid)) {
-      auto UUID = myQueue2.get_device().get_info<sycl::ext::intel::info::device::uuid>();
-      char foo[1024];
-      sprintf(foo,"\nUUID = %u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u.%u",UUID[0],UUID[1],UUID[2],UUID[3],UUID[4],UUID[5],UUID[6],UUID[7],UUID[8],UUID[9],UUID[10],UUID[11],UUID[12],UUID[13],UUID[14],UUID[15]);
-      std::cout << foo;
-    }
-#endif
-#endif
-    std::cout << "\n";
-#endif
 
 #ifdef MYDEBUGS
     auto t1 = std::chrono::steady_clock::now();  // Start timing
 #endif
 
-#ifdef DOUBLETROUBLE
-    std::array<int, 200> d4;
-    // inspired and based upon:
-    // https://cs.uwaterloo.ca/~alopez-o/math-faq/mathtext/node12.html
-    // and
-    // https://crypto.stanford.edu/pbc/notes/pi/code.html
-    // (retrieved September 13, 2023)
-    //
-    sycl::buffer outD4(d4);
-    sycl::event e2 = myQueue2.submit([&](sycl::handler& cgh2) {
-      auto outAccessor = outD4.get_access<sycl::access::mode::write>(cgh2);
-      cgh2.single_task([=]() {
-        int r[2800 + 1];
-        int i, k;
-        int b, d;
-        int c = 0;
-	int hold = 0;
-
-        for (i = 0; i < 2800; i++) {
-          r[i] = 2000;
-        }
-        r[2800] = 0;
-
-        for (k = 2800; k > 0; k -= 14) {
-          d = 0;
-
-          i = k;
-          for (;;) {
-            d += r[i] * 10000;
-            b = 2 * i - 1;
-
-            r[i] = d % b;
-            d /= b;
-            i--;
-            if (i == 0) break;
-            d *= i;
-          }
-          outAccessor[hold++] = c + d / 10000;
-	  c = d % 10000;
-        }
-      });
-    });
-#endif
 
   auto inImgWidth = inImage.width();
   auto inImgHeight = inImage.height();
@@ -257,26 +164,68 @@ int main(int argc, char* argv[]) {
 
   /* Partition image across the 4 devices row-wise */
   int inImgPartitionWidth = inImgWidth;
-  int inImgPartitionHeight = inImgHeight / howmany_devices;
+  int inImgPartitionHeight = inImgHeight / ndevs;
   sycl::range<2> partitionGlobalRange = sycl::range(inImgPartitionWidth, inImgPartitionHeight);
   sycl::nd_range<2> partitionNdRange = sycl::nd_range(partitionGlobalRange,localRange);
 
   auto partitionInBufRange = 
-      sycl::range(inImgPartitionHeight + (halo * 2), inImgPartitionWidth + (halo * 2)) *
-      sycl::range(1, channels);
-
+        sycl::range(inImgPartitionHeight + (halo * 2), inImgPartitionWidth + (halo * 2)) *
+        sycl::range(1, channels);
   auto partitionOutBufRange =
       sycl::range(inImgPartitionHeight, inImgPartitionWidth) * sycl::range(1, channels);
+
+  
 {
 
     /* Create array of sycl buffers that contains partitions of the input image.
      * Iterate through the array of queues and for each one, submit a kernel with an accessor tied to the partition of the input image.
      * Also write back to appropriate region of output using pointer offset.
      * I think each kernel should be identical given the way we have partitioned the image. */
+    
+    /* Vectors containing image partitions */
+    //std::vector<sycl::buffer<float>> inBufParts(ndevs);
+    //std::vector<sycl::buffer<float>> outBufParts(ndevs);
+    
+    /* Offsets used to compute partition for each device */
+    size_t outOffset = inImgWidth * (inImgPartitionHeight); 
+    size_t inOffset = (inImgWidth + (halo * 2)) * (inImgPartitionHeight + (halo * 2)) * channels;
+    
+    /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
 
+    /* Store events */
+    std::vector<sycl::event> events(ndevs);
+    for (int queueId=0; queueId<ndevs; queueId++) {
+        size_t curOffsetOut = outOffset*queueId;
+        size_t curOffsetIn = inOffset*queueId;
+
+        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetOut, partitionInBufRange};
+        //inBufParts.push_back(inBufPart);
+
+        sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
+        outBufPart.set_final_data(outImage.data()+curOffsetIn);
+        //outBufParts.push_back(outBufPart);
+        
+        /* Submit kernels on each device */
+        sycl::queue queue = myQueues[queueId];
+
+        sycl::event e = queue.submit([&](sycl::handler& cgh) {
+           
+            sycl::accessor filterAccessor{filterBuf, cgh, sycl::read_only};
+            sycl::accessor inBufAccessor{inBufPart, cgh, sycl::read_only};
+            sycl::accessor outBufAccessor{outBufPart, cgh, sycl::write_only};
+
+            cgh.parallel_for(partitionNdRange, [=](sycl::nd_item<2> item) {
+                        
+            });
+
+        });
+
+    }
+
+
     
-    
+     
 
 
 
@@ -400,3 +349,4 @@ check_image_correct(outImage, outImageCorrect);
 
 util::write_image(outImage, outFile);
 }
+

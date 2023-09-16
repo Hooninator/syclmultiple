@@ -26,7 +26,7 @@ If the image is too large - the runtime may segment fault -
 this code doesn't check for limits (bad, bad, bad!)
 
 ********************************************************************/
-
+ 
 #define MYDEBUGS
 #define DEBUGDUMP
 //#define DOUBLETROUBLE
@@ -177,10 +177,13 @@ int main(int argc, char* argv[]) {
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
 
+    std::cout<<outImage.data()[offsetOut]<<std::endl;
+
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = offsetOut*queueId;
         size_t curOffsetIn = offsetIn*queueId;
 
+	std::cout<<"Out offset: "<<curOffsetOut<<std::endl;
         /* Create buffers from offsets */
         sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
@@ -320,4 +323,4 @@ check_image_correct(outImage, outImageCorrect);
 
 util::write_image(outImage, outFile);
 }
-
+ 

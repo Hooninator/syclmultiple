@@ -131,15 +131,13 @@ template <typename T>
 void check_image_correct(const image_ref<T>& img1, const image_ref<T>& img2) {
 	std::cout<<"Checking correctness..."<<std::endl;
 	float EPSILON = 0.001;
-	assert(img1.width()==img2.width());
-	assert(img1.height()==img2.height());
-	for (int i=0; i<img1.width(); i++) {
-		for (int j=0; j<img1.height(); j++) {
-			try {
-				assert(fabs(img1.data()[i+j]-img2.data()[i+j])<EPSILON);
-			} catch(std::exception& e) {
-				std::cout<<"Correctness check failed."<<std::endl;
-			}
+	assert(img1.size()==img2.size());
+	for (int i=0; i<img1.size(); i++) {
+		if(fabs(img1.data()[i]-img2.data()[i])>EPSILON) {
+			std::cout<<"Error at "<<i
+				<<", values are "<<img1.data()[i]<<", "
+				<<img2.data()[i]<<std::endl;
+			return;
 		}
 	}
 	std::cout<<"Correctness check passed!"<<std::endl;

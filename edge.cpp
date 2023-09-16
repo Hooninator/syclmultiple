@@ -171,32 +171,33 @@ int main(int argc, char* argv[]) {
 {
 
     /* Offsets used to compute partition for each device */
-    size_t offsetOut = (outImage.height() / ndevs) * outImage.width(); 
-    size_t offsetIn = (inImage.height_with_halo() / ndevs) * outImage.width_with_halo();
+    size_t offsetOut = (outImage.height() / ndevs) * outImage.width() * outImage.channels(); 
+    size_t offsetIn = (inImage.height() / ndevs) * inImage.width_with_halo() * outImage.channels();
     
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
 
-    std::cout<<outImage.data()[offsetOut]<<std::endl;
 
+    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = offsetOut*queueId;
         size_t curOffsetIn = offsetIn*queueId;
 
-	std::cout<<"Out offset: "<<curOffsetOut<<std::endl;
         /* Create buffers from offsets */
         sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
-        sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
+        sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{outImage.data()+curOffsetOut, partitionOutBufRange};
 
 	/* Write to appropriate region of output image */
-        outBufPart.set_final_data(outImage.data() + curOffsetOut);
+        //outBufPart.set_final_data(outImage.data() + curOffsetOut);
         
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
         sycl::event e = queue.submit([&](sycl::handler& cgh) {
+
             sycl::accessor filterAccessor{filterBuf, cgh, sycl::read_only};
             sycl::accessor inBufAccessor{inBufPart, cgh, sycl::read_only};
             sycl::accessor outBufAccessor{outBufPart, cgh, sycl::write_only};
+
             cgh.parallel_for(partitionNdRange, [=](sycl::nd_item<2> item) {
                 sycl::id<2> globalId = item.get_global_id();
                 globalId = sycl::id{globalId[1], globalId[0]};
@@ -249,7 +250,6 @@ int main(int argc, char* argv[]) {
 
 #ifdef CORRECTNESS
     /* Rerun the image blurring on a single device to make sure it works */
-    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
     auto outBuf = sycl::buffer<float, 2>{outBufRange};
     outBuf.set_final_data(outImageCorrect.data());
 

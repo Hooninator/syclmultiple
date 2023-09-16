@@ -41,7 +41,7 @@ this code doesn't check for limits (bad, bad, bad!)
 
 #include "image_conv.h"
 
-inline constexpr int filterWidth = 11;
+inline constexpr int filterWidth = 16;
 inline constexpr int halo = filterWidth / 2;
 
 int main(int argc, char* argv[]) {
@@ -174,6 +174,7 @@ int main(int argc, char* argv[]) {
   auto partitionOutBufRange =
       sycl::range(inImgPartitionHeight, inImgPartitionWidth) * sycl::range(1, channels);
 
+  std::cout<<"Partition range size: "<<partitionInBufRange.size()<<std::endl;
   
 {
 
@@ -182,13 +183,9 @@ int main(int argc, char* argv[]) {
      * Also write back to appropriate region of output using pointer offset.
      * I think each kernel should be identical given the way we have partitioned the image. */
     
-    /* Vectors containing image partitions */
-    //std::vector<sycl::buffer<float>> inBufParts(ndevs);
-    //std::vector<sycl::buffer<float>> outBufParts(ndevs);
-    
     /* Offsets used to compute partition for each device */
-    size_t offsetOut = inImgWidth * (inImgPartitionHeight) * channels; 
-    size_t offsetIn = inImage.size_with_halo() / ndevs;
+    size_t offsetOut = (outImage.height() / ndevs) * outImage.width(); 
+    size_t offsetIn = (inImage.height_with_halo() / ndevs) * outImage.width_with_halo();
     
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
@@ -198,19 +195,13 @@ int main(int argc, char* argv[]) {
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = offsetOut*queueId;
         size_t curOffsetIn = offsetIn*queueId;
-        std::cout<<"Out increment: "<<offsetOut<<", in increment: "<<offsetIn<<std::endl;
-        std::cout<<"Out offset: "<<curOffsetOut<<", "<<" In offset: "<<curOffsetIn<<std::endl;
-        std::cout<<"Out limit: "<<outImage.width()*outImage.height()*channels<<std::endl;
-        std::cout<<"In image size with halo: "<<inImage.size_with_halo()<<std::endl;
 
+        /* Create buffers from offsets */
         sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
-        //inBufParts.push_back(inBufPart);
-
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
+
         outBufPart.set_final_data(outImage.data() + curOffsetOut);
-        //outBufParts.push_back(outBufPart);
         
-        std::cout<<"submitting kernel..."<<std::endl;
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
 
@@ -226,9 +217,7 @@ int main(int argc, char* argv[]) {
             });
 
         });
-        std::cout<<"Kernel submitted"<<std::endl;
     }
-    std::cout<<"Done submitting kernels"<<std::endl;
 
     /* Wait for all devices to finish */
     for (int i=0; i<ndevs; i++)

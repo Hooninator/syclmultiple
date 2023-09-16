@@ -2,4 +2,4 @@ all:	edge
 	./edge goldfish.png
 
 edge:	edge.cpp Makefile
-	icpx -o edge -fsycl edge.cpp
+	icpx -o edge -fsycl edge.cpp -O3

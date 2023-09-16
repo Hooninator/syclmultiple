@@ -31,6 +31,7 @@ this code doesn't check for limits (bad, bad, bad!)
 #define DEBUGDUMP
 //#define DOUBLETROUBLE
 #define CORRECTNESS
+#define PROFILE
 
 #include <algorithm>
 #include <array>
@@ -153,18 +154,12 @@ int main(int argc, char* argv[]) {
             << "\nhalo: " << halo << "\n";
 #endif
 
-  // Always good to limit scope of accessors,
-  // so a good SYCL program will introduce a scope before
-  // defining buffers.
-  // Remember: While a buffer exists, the data it points
-  // to should ONLY be accessed with an accessor. That
-  // goes for the host just as much as the device.
-
   /* PARALLEL IMPLEMENTATION BEGINS HERE */
 
   /* Partition image across the 4 devices row-wise */
   int inImgPartitionWidth = inImgWidth;
   int inImgPartitionHeight = inImgHeight / ndevs;
+
   sycl::range<2> partitionGlobalRange = sycl::range(inImgPartitionWidth, inImgPartitionHeight);
   sycl::nd_range<2> partitionNdRange = sycl::nd_range(partitionGlobalRange,localRange);
 
@@ -173,16 +168,8 @@ int main(int argc, char* argv[]) {
         sycl::range(1, channels);
   auto partitionOutBufRange =
       sycl::range(inImgPartitionHeight, inImgPartitionWidth) * sycl::range(1, channels);
-
-  std::cout<<"Partition range size: "<<partitionInBufRange.size()<<std::endl;
-  
 {
 
-    /* Create array of sycl buffers that contains partitions of the input image.
-     * Iterate through the array of queues and for each one, submit a kernel with an accessor tied to the partition of the input image.
-     * Also write back to appropriate region of output using pointer offset.
-     * I think each kernel should be identical given the way we have partitioned the image. */
-    
     /* Offsets used to compute partition for each device */
     size_t offsetOut = (outImage.height() / ndevs) * outImage.width(); 
     size_t offsetIn = (inImage.height_with_halo() / ndevs) * outImage.width_with_halo();
@@ -190,8 +177,6 @@ int main(int argc, char* argv[]) {
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
 
-    /* Store events */
-    std::vector<sycl::event> events(ndevs);
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = offsetOut*queueId;
         size_t curOffsetIn = offsetIn*queueId;
@@ -200,6 +185,7 @@ int main(int argc, char* argv[]) {
         sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
 
+	/* Write to appropriate region of output image */
         outBufPart.set_final_data(outImage.data() + curOffsetOut);
         
         /* Submit kernels on each device */
@@ -246,7 +232,12 @@ int main(int argc, char* argv[]) {
 
             });
         });
-	events.push_back(e);
+#ifdef PROFILE
+	double multiGPUTime = e.template get_profiling_info<sycl::info::event_profiling::command_end>() -
+	    		  e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+    	std::cout<< "Runtime on GPU "<<queueId<<": "<< multiGPUTime
+              << " nanoseconds (" << multiGPUTime / 1.0e9 << " seconds)\n";
+#endif
     }
 
     /* Wait for all devices to finish */
@@ -307,43 +298,14 @@ int main(int argc, char* argv[]) {
 
 #endif
 
-#ifdef MYDEBUGS
-    // Timing code is from our book (2nd edition) -
-    // read section on profiling in
-    // Chapter 13 that includes figures 13-6 through 13-8.
-    // Check https://tinyurl.com/reinders-4class for link
-    // to copy of 2nd edition ("Learn SYCL").
-
-    double time1A = (e1.template get_profiling_info<
+#ifdef CORRECTNESS
+#ifdef PROFILE
+    double singleGPUTime = (e1.template get_profiling_info<
                          sycl::info::event_profiling::command_end>() -
                      e1.template get_profiling_info<
                          sycl::info::event_profiling::command_start>());
-    auto t2 = std::chrono::steady_clock::now();  // Stop timing
-    double time1B =
-        (std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
-             .count());
-
-    std::cout << "profiling: Operation completed on device1 in " << time1A
-              << " nanoseconds (" << time1A / 1.0e9 << " seconds)\n";
-    std::cout << "chrono: Operationd completed on device1 in " << time1B * 1000
-              << " nanoseconds (" << time1B * 1000 / 1.0e9 << " seconds)\n";
-    std::cout << "chrono more than profiling by " << (time1B * 1000 - time1A)
-              << " nanoseconds (" << (time1B * 1000 - time1A) / 1.0e9
-              << " seconds)\n";
-
-#ifdef DOUBLETROUBLE
-    e2.wait(); // make sure all digits are done being computed
-    sycl::host_accessor myD4(outD4); // the scope of the buffer continues - so we must not use d4[] directly
-    std::cout << "First 800 digits of pi: ";
-    for (int i = 0; i < 200; ++i) printf("%.4d", myD4[i]);
-    std::cout << "\n";
-
-    double time2A = (e2.template get_profiling_info<
-                         sycl::info::event_profiling::command_end>() -
-                     e2.template get_profiling_info<
-                         sycl::info::event_profiling::command_start>());
-    std::cout << "profiling: Operation completed on device2 in " << time2A
-              << " nanoseconds (" << time2A / 1.0e9 << " seconds)\n";
+    std::cout << "Single GPU runtime: " << singleGPUTime
+              << " nanoseconds (" << singleGPUTime / 1.0e9 << " seconds)\n";
 #endif
 #endif
   }

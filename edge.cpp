@@ -27,8 +27,8 @@ this code doesn't check for limits (bad, bad, bad!)
 
 ********************************************************************/
  
-#define MYDEBUGS
-#define DEBUGDUMP
+//#define MYDEBUGS
+//#define DEBUGDUMP
 //#define DOUBLETROUBLE
 #define CORRECTNESS
 #define PROFILE
@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) {
     auto RootDevices = P.get_devices();
     // auto C = sycl::context(RootDevices);
     for (auto &D : RootDevices) {
-      myQueues[ndevs++] = sycl::queue(D,sycl::property::queue::enable_profiling{});
+      myQueues[ndevs++] = sycl::queue(D, sycl::property::queue::enable_profiling{});
       if (ndevs >= MAXDEVICES)
 	break;
     }
@@ -112,8 +112,6 @@ int main(int argc, char* argv[]) {
   ndevs = arg_ndevs;
 
   try {
-    /* Define queues */
-    sycl::queue myQueue1 = myQueues[0];
 
   auto inImgWidth = inImage.width();
   auto inImgHeight = inImage.height();
@@ -167,34 +165,43 @@ int main(int argc, char* argv[]) {
 
     /* Offsets used to compute partition for each device */
     size_t offsetOut = (outImage.height() / ndevs) * outImage.width() * outImage.channels(); 
-    size_t offsetIn = (inImage.height() / ndevs) * inImage.width_with_halo() * outImage.channels();
+    size_t offsetIn = (inImage.height() / ndevs) * inImage.width_with_halo() * inImage.channels();
     
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
     
+    assert(ndevs<=4);
     sycl::event e1, e2, e3, e4;
     std::vector<sycl::event> events = {e1, e2, e3, e4};
-    assert(ndevs<=4);
+
+    std::vector<sycl::buffer<float, 2>> outBufParts, inBufParts;
+    for (int i=0; i<ndevs; i++) {
+        size_t curOffsetOut = offsetOut*i;
+	auto outBufPart = sycl::buffer<float, 2>{partitionOutBufRange};
+	outBufPart.set_final_data(outImage.data() + curOffsetOut);
+	outBufParts.push_back(outBufPart);
+
+        size_t curOffsetIn = offsetIn*i;
+        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
+	inBufParts.push_back(inBufPart);
+    }
 
 #ifdef PROFILE
     auto stime = std::chrono::system_clock::now();
 #endif
-
     for (int queueId=0; queueId<ndevs; queueId++) {
-        size_t curOffsetOut = offsetOut*queueId;
-        size_t curOffsetIn = offsetIn*queueId;
 
         /* Create buffers from offsets */
-        sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
-        sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{outImage.data()+curOffsetOut, partitionOutBufRange};
+	auto inBufPart = inBufParts[queueId];
+	auto outBufPart = outBufParts[queueId];
         
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
         events[queueId] = queue.submit([&](sycl::handler& cgh) {
 
-            sycl::accessor filterAccessor{filterBuf, cgh, sycl::read_only};
-            sycl::accessor inBufAccessor{inBufPart, cgh, sycl::read_only};
-            sycl::accessor outBufAccessor{outBufPart, cgh, sycl::write_only};
+            sycl::accessor filterAccessor{filterBuf, cgh};
+            sycl::accessor inBufAccessor{inBufPart, cgh};
+            sycl::accessor outBufAccessor{outBufPart, cgh};
 
             cgh.parallel_for(partitionNdRange, [=](sycl::nd_item<2> item) {
                 sycl::id<2> globalId = item.get_global_id();
@@ -210,10 +217,12 @@ int main(int argc, char* argv[]) {
                 float sum[/* channels */ 100];
                 assert(channels < 100);
 
+                
                 for (size_t i = 0; i < channels; ++i) {
                   sum[i] = 0.0f;
                 }
 
+		for (int k=0; k<100; k++){
                 for (int r = 0; r < filterWidth; ++r) {
                   for (int c = 0; c < filterWidth; ++c) {
                     auto srcOffset =
@@ -227,24 +236,24 @@ int main(int argc, char* argv[]) {
                     }
                   }
                 }
+		}
 
                 for (size_t i = 0; i < channels; ++i) {
                   outBufAccessor[dest + sycl::id{0, i}] = sum[i];
                 }
-
             });
         });
     }
 
     /* Wait for all devices to finish */
     for (int queueId=0; queueId<ndevs; queueId++) {
-        myQueues[queueId].wait();
+        myQueues[queueId].wait_and_throw();
 #ifdef PROFILE
-        sycl::event e = events[queueId];
-        double multiGPUTime = e.template get_profiling_info<sycl::info::event_profiling::command_end>() -
-	    		  e.template get_profiling_info<sycl::info::event_profiling::command_start>();
-    	std::cout<< "Runtime on GPU "<<queueId<<": "<< multiGPUTime
-              << " nanoseconds (" << multiGPUTime / 1.0e9 << " seconds)\n";
+        //sycl::event e = events[queueId];
+        //double multiGPUTime = e.template get_profiling_info<sycl::info::event_profiling::command_end>() -
+	    //		  e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+    	//std::cout<< "Runtime on GPU "<<queueId<<": "<< multiGPUTime
+          //    << " nanoseconds (" << multiGPUTime / 1.0e9 << " seconds)\n";
 #endif
     }
 #ifdef PROFILE

@@ -48,8 +48,9 @@ inline constexpr int halo = filterWidth / 2;
 int main(int argc, char* argv[]) {
   const char* inFile = argv[1];
   char* outFile;
+  int arg_ndevs;
 
-  if (argc == 2) {
+  if (argc == 3) {
     if (strchr(inFile, '/') || strchr(inFile, '\\')) {
       std::cerr << "Sorry, filename cannot include a path.\n";
       exit(1);
@@ -60,6 +61,7 @@ int main(int argc, char* argv[]) {
     outFile = (char*)malloc((len1 + len2 + 1) * sizeof(char));
     strcpy(outFile, prefix);
     strcpy(outFile + 8, inFile);
+    arg_ndevs = std::atoi(argv[2]);
 #ifdef MYDEBUGS
     std::cout << "Input file: " << inFile << "\nOutput file: " << outFile
               << "\n";
@@ -74,10 +76,6 @@ int main(int argc, char* argv[]) {
   auto outImage = util::allocate_image(inImage.width(), inImage.height(),
                                        inImage.channels());
 
-#ifdef CORRECTNESS
-  auto outImageCorrect = util::allocate_image(inImage.width(), inImage.height(),
-                                        inImage.channels());
-#endif 
   // The image convolution support code provides a
   // `filter_type` enum which allows us to choose between
   // `identity` and `blur`. The utility for generating the
@@ -111,14 +109,11 @@ int main(int argc, char* argv[]) {
     myQueues[0] = sycl::queue(sycl::property::queue::enable_profiling{});
   }
 
+  ndevs = arg_ndevs;
+
   try {
     /* Define queues */
     sycl::queue myQueue1 = myQueues[0];
-
-#ifdef MYDEBUGS
-    auto t1 = std::chrono::steady_clock::now();  // Start timing
-#endif
-
 
   auto inImgWidth = inImage.width();
   auto inImgHeight = inImage.height();
@@ -176,9 +171,15 @@ int main(int argc, char* argv[]) {
     
     /* Filterbuf is the same for all queues */
     auto filterBuf = sycl::buffer{filter.data(), filterRange};
+    
+    sycl::event e1, e2, e3, e4;
+    std::vector<sycl::event> events = {e1, e2, e3, e4};
+    assert(ndevs<=4);
 
+#ifdef PROFILE
+    auto stime = std::chrono::system_clock::now();
+#endif
 
-    auto inBuf = sycl::buffer{inImage.data(), inBufRange};
     for (int queueId=0; queueId<ndevs; queueId++) {
         size_t curOffsetOut = offsetOut*queueId;
         size_t curOffsetIn = offsetIn*queueId;
@@ -186,13 +187,10 @@ int main(int argc, char* argv[]) {
         /* Create buffers from offsets */
         sycl::buffer<float, 2> inBufPart = sycl::buffer<float, 2>{inImage.data() + curOffsetIn , partitionInBufRange};
         sycl::buffer<float, 2> outBufPart = sycl::buffer<float, 2>{outImage.data()+curOffsetOut, partitionOutBufRange};
-
-	/* Write to appropriate region of output image */
-        //outBufPart.set_final_data(outImage.data() + curOffsetOut);
         
         /* Submit kernels on each device */
         sycl::queue queue = myQueues[queueId];
-        sycl::event e = queue.submit([&](sycl::handler& cgh) {
+        events[queueId] = queue.submit([&](sycl::handler& cgh) {
 
             sycl::accessor filterAccessor{filterBuf, cgh, sycl::read_only};
             sycl::accessor inBufAccessor{inBufPart, cgh, sycl::read_only};
@@ -202,114 +200,58 @@ int main(int argc, char* argv[]) {
                 sycl::id<2> globalId = item.get_global_id();
                 globalId = sycl::id{globalId[1], globalId[0]};
 
-		auto channelsStride = sycl::range(1, channels);
-		auto haloOffset = sycl::id(halo, halo);
-		auto src = (globalId + haloOffset) * channelsStride;
-		auto dest = globalId * channelsStride;
+                auto channelsStride = sycl::range(1, channels);
+                auto haloOffset = sycl::id(halo, halo);
+                auto src = (globalId + haloOffset) * channelsStride;
+                auto dest = globalId * channelsStride;
 
 
-		// 100 is a hack - so the dim is not dynamic
-		float sum[/* channels */ 100];
-		assert(channels < 100);
+                // 100 is a hack - so the dim is not dynamic
+                float sum[/* channels */ 100];
+                assert(channels < 100);
 
-		for (size_t i = 0; i < channels; ++i) {
-		  sum[i] = 0.0f;
-		}
+                for (size_t i = 0; i < channels; ++i) {
+                  sum[i] = 0.0f;
+                }
 
-		for (int r = 0; r < filterWidth; ++r) {
-		  for (int c = 0; c < filterWidth; ++c) {
-		    auto srcOffset =
-			sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
-		    auto filterOffset = sycl::id(r, c * channels);
+                for (int r = 0; r < filterWidth; ++r) {
+                  for (int c = 0; c < filterWidth; ++c) {
+                    auto srcOffset =
+                    sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
+                    auto filterOffset = sycl::id(r, c * channels);
 
-		    for (int i = 0; i < channels; ++i) {
-		      auto channelOffset = sycl::id(0, i);
-		      sum[i] += inBufAccessor[srcOffset + channelOffset] *
-				filterAccessor[filterOffset + channelOffset];
-		    }
-		  }
-		}
+                    for (int i = 0; i < channels; ++i) {
+                      auto channelOffset = sycl::id(0, i);
+                      sum[i] += inBufAccessor[srcOffset + channelOffset] *
+                        filterAccessor[filterOffset + channelOffset];
+                    }
+                  }
+                }
 
-		for (size_t i = 0; i < channels; ++i) {
-		  outBufAccessor[dest + sycl::id{0, i}] = sum[i];
-		}
+                for (size_t i = 0; i < channels; ++i) {
+                  outBufAccessor[dest + sycl::id{0, i}] = sum[i];
+                }
 
             });
         });
+    }
+
+    /* Wait for all devices to finish */
+    for (int queueId=0; queueId<ndevs; queueId++) {
+        myQueues[queueId].wait();
 #ifdef PROFILE
-	double multiGPUTime = e.template get_profiling_info<sycl::info::event_profiling::command_end>() -
+        sycl::event e = events[queueId];
+        double multiGPUTime = e.template get_profiling_info<sycl::info::event_profiling::command_end>() -
 	    		  e.template get_profiling_info<sycl::info::event_profiling::command_start>();
     	std::cout<< "Runtime on GPU "<<queueId<<": "<< multiGPUTime
               << " nanoseconds (" << multiGPUTime / 1.0e9 << " seconds)\n";
 #endif
     }
-
-    /* Wait for all devices to finish */
-    for (int i=0; i<ndevs; i++)
-        myQueues[i].wait();
-
-#ifdef CORRECTNESS
-    /* Rerun the image blurring on a single device to make sure it works */
-    auto outBuf = sycl::buffer<float, 2>{outBufRange};
-    outBuf.set_final_data(outImageCorrect.data());
-
-    sycl::event e1 = myQueue1.submit([&](sycl::handler& cgh1) {
-      sycl::accessor inAccessor{inBuf, cgh1, sycl::read_only};
-      sycl::accessor outAccessor{outBuf, cgh1, sycl::write_only};
-      sycl::accessor filterAccessor{filterBuf, cgh1, sycl::read_only};
-
-      cgh1.parallel_for(ndRange, [=](sycl::nd_item<2> item) {
-        auto globalId = item.get_global_id();
-        globalId = sycl::id{globalId[1], globalId[0]};
-
-        auto channelsStride = sycl::range(1, channels);
-        auto haloOffset = sycl::id(halo, halo);
-        auto src = (globalId + haloOffset) * channelsStride;
-        auto dest = globalId * channelsStride;
-
-
-        // 100 is a hack - so the dim is not dynamic
-        float sum[/* channels */ 100];
-        assert(channels < 100);
-
-        for (size_t i = 0; i < channels; ++i) {
-          sum[i] = 0.0f;
-        }
-
-        for (int r = 0; r < filterWidth; ++r) {
-          for (int c = 0; c < filterWidth; ++c) {
-            auto srcOffset =
-                sycl::id(src[0] + (r - halo), src[1] + ((c - halo) * channels));
-            auto filterOffset = sycl::id(r, c * channels);
-
-            for (int i = 0; i < channels; ++i) {
-              auto channelOffset = sycl::id(0, i);
-              sum[i] += inAccessor[srcOffset + channelOffset] *
-                        filterAccessor[filterOffset + channelOffset];
-            }
-          }
-        }
-
-        for (size_t i = 0; i < channels; ++i) {
-          outAccessor[dest + sycl::id{0, i}] = sum[i];
-        }
-      });
-    });
-
-    myQueue1.wait_and_throw();
-
-
-#endif
-
-#ifdef CORRECTNESS
 #ifdef PROFILE
-    double singleGPUTime = (e1.template get_profiling_info<
-                         sycl::info::event_profiling::command_end>() -
-                     e1.template get_profiling_info<
-                         sycl::info::event_profiling::command_start>());
-    std::cout << "Single GPU runtime: " << singleGPUTime
-              << " nanoseconds (" << singleGPUTime / 1.0e9 << " seconds)\n";
-#endif
+    auto etime = std::chrono::system_clock::now();
+    auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(etime - stime).count();
+    std::cout<<"Total runtime on "<<ndevs<<" GPUs: "<<diff
+        <<" nanoseconds (" <<diff / 1.0e9 << " seconds)"<<std::endl;
 #endif
   }
 }
@@ -317,9 +259,6 @@ catch (sycl::exception e) {
   std::cout << "Exception caught: " << e.what() << std::endl;
 }
 
-#ifdef CORRECTNESS
-check_image_correct(outImage, outImageCorrect);
-#endif
 
 util::write_image(outImage, outFile);
 }
